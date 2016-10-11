@@ -11,6 +11,7 @@ typedef struct siri_args_s
     /* true/false props */
     int32_t version;
     int32_t log_colorized;
+    int32_t use_syslog;
 
     /* string props */
     char config[255];

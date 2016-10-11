@@ -19,6 +19,7 @@ static siri_args_t siri_args = {
         .config="",
         .log_level="",
         .log_colorized=0,
+        .use_syslog=0
 };
 
 void siri_args_parse(siri_t * siri, int argc, char *argv[])
@@ -77,10 +78,22 @@ void siri_args_parse(siri_t * siri, int argc, char *argv[])
             NULL                                        /* choices          */
     };
 
+    argparse_argument_t use_syslog = {
+            "use_syslog",                               /* name             */
+            0,                                          /* shortcut         */
+            "use syslog for logging",                   /* help             */
+            ARGPARSE_STORE_TRUE,                        /* action           */
+            0,                                          /* default int32_t  */
+            &siri_args.use_syslog,                      /* value pt_int32_t */
+            NULL,                                       /* default string   */
+            NULL,                                       /* value string     */
+            NULL                                        /* choices          */
+    };
     argparse_add_argument(&parser, &config);
     argparse_add_argument(&parser, &version);
     argparse_add_argument(&parser, &log_level);
     argparse_add_argument(&parser, &log_colorized);
+    argparse_add_argument(&parser, &use_syslog);
 
     /* this will parse and free the parser from memory */
     argparse_parse(&parser, argc, argv);

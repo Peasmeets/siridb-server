@@ -91,20 +91,25 @@ void siri_setup_logger(void)
         Logger.flags |= LOGGER_FLAG_COLORED;
     }
 
+    if (siri.args->use_syslog)
+    {
+        Logger.flags |= LOGGER_FLAG_SYSLOG;
+    }
+
     for (n = 0; n < LOGGER_NUM_LEVELS; n++)
     {
         strcpy(lname, LOGGER_LEVEL_NAMES[n]);
         strx_lower_case(lname);
         if (strlen(lname) == len && strcmp(siri.args->log_level, lname) == 0)
         {
-            logger_init(stdout, (n + 1) * 10);
+            logger_init(stdout, n);
             return;
         }
     }
     /* We should not get here since args should always
      * contain a valid log level
      */
-    logger_init(stdout, 10);
+    logger_init(stdout, 1);
 }
 
 

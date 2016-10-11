@@ -91,5 +91,8 @@ int main(int argc, char * argv[])
 
     log_info("Bye! (%d)\n", siri_err);
 
+    /* close logger */
+    logger_destroy();
+
     return siri_err;
 }

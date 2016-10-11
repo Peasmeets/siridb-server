@@ -11,15 +11,16 @@
  */
 #pragma once
 
-#define LOGGER_DEBUG 10
-#define LOGGER_INFO 20
-#define LOGGER_WARNING 30
-#define LOGGER_ERROR 40
-#define LOGGER_CRITICAL 50
+#define LOGGER_DEBUG 0
+#define LOGGER_INFO 1
+#define LOGGER_WARNING 2
+#define LOGGER_ERROR 3
+#define LOGGER_CRITICAL 4
 
 #define LOGGER_NUM_LEVELS 5
 
 #define LOGGER_FLAG_COLORED 1
+#define LOGGER_FLAG_SYSLOG 2
 
 typedef struct logger_s
 {
@@ -33,6 +34,7 @@ const char * LOGGER_LEVEL_NAMES[LOGGER_NUM_LEVELS];
 
 void logger_init(struct _IO_FILE * ostream, int log_level);
 void logger_set_level(int log_level);
+void logger_destroy(void);
 const char * logger_level_name(int log_level);
 
 void log__debug(char * fmt, ...);
