@@ -137,7 +137,7 @@ if (IS_MASTER && siridb_is_reindexing(siridb))                              \
 #define MSG_SUCCESS_DROP_GROUP \
 	"Successfully dropped group '%s'."
 #define MSG_SUCCESS_ALTER_GROUP \
-	"Successful updated group '%s'."
+	"Successfully updated group '%s'."
 #define MSG_SUCCESS_SET_DROP_THRESHOLD \
     "Successfully changed drop_threshold from %g to %g."
 #define MSG_SUCCESS_SET_ADDR_PORT \
@@ -146,7 +146,17 @@ if (IS_MASTER && siridb_is_reindexing(siridb))                              \
 	"Successfully dropped server '%s'."
 #define MSG_SUCCES_SET_LOG_LEVEL_MULTI \
     "Successfully set log level to '%s' on %lu servers."
-
+#define MSG_SUCCES_SET_LOG_LEVEL \
+	"Successfully set log level to '%s' on '%s'."
+#define MSG_SUCCES_DROP_SERIES \
+	"Successfully dropped %lu series."
+#define MSG_SUCCES_DROP_SHARDS \
+	"Successfully dropped %lu shards. (this number does not include " \
+	"shards which are dropped on replica servers)"
+#define MSG_SUCCES_SET_BACKUP_MODE \
+	"Successfully %s backup mode on '%s'."
+#define MSG_SUCCES_SET_TIMEZONE \
+	"Successfully changed timezone from '%s' to '%s'."
 #define MSG_ERR_SERVER_ADDRESS \
     "Its only possible to change a servers address or port when the server " \
     "is not connected."
@@ -461,7 +471,6 @@ static void enter_access_expr(uv_async_t * handle)
 
     SIRIPARSER_NEXT_NODE
 }
-
 
 static void enter_alter_group(uv_async_t * handle)
 {
@@ -827,7 +836,7 @@ static void enter_merge_as(uv_async_t * handle)
 
     if (q_select->merge_as == NULL)
     {
-        ERR_ALLOC
+    	MEM_ERR_RET
     }
     else
     {
@@ -1039,7 +1048,6 @@ static void enter_series_name(uv_async_t * handle)
     /* extract series name */
     strx_extract_string(series_name, node->str, node->len);
 
-
     if (siridb_is_reindexing(siridb))
     {
         series = ct_get(siridb->series, series_name);
@@ -1147,16 +1155,18 @@ static void enter_series_name(uv_async_t * handle)
                         series->id);
                 siridb_series_decref(series);
                 break;
+
             case 1:
                 siridb_series_incref(series);
                 break;
+
             default:
-                return;  // signal is raised
+            	MEM_ERR_RET  // signal is raised
             }
         }
         else
         {
-            /* must be cached by one of the above */
+            /* we should not get here */
             assert (0);
         }
     }
@@ -1310,7 +1320,7 @@ static void enter_xxx_columns(uv_async_t * handle)
                     &qlist->props,
                     &columns->node->children->node->cl_obj->via.dummy->gid))
             {
-                ERR_ALLOC
+            	MEM_ERR_RET
             }
 
             if (columns->next == NULL)
@@ -2073,54 +2083,65 @@ static void exit_drop_series(uv_async_t * handle)
     MASTER_CHECK_ACCESSIBLE(siridb)
 
     /*
+     * We transform or copy the references from imap to slist because we need
+     * this list for both filtering or performing the actual drop.
+     */
+	q_drop->slist = (q_drop->series_map == NULL) ?
+		imap_2slist_ref(siridb->series_map) :
+		imap_slist_pop(q_drop->series_map);
+
+    if (q_drop->slist == NULL)
+    {
+    	MEM_ERR_RET
+    }
+
+	if (q_drop->series_map != NULL)
+	{
+		/* now we can simply destroy the imap in case we had one */
+		imap_free(q_drop->series_map, NULL);
+		q_drop->series_map = NULL;
+	}
+
+    /*
      * This function will be called twice when using a where statement.
      * The second time the where_expr is NULL and the reason we do this is
      * so that we can honor a correct drop threshold.
      */
     if (q_drop->where_expr != NULL)
     {
-        /* we transform the references from imap to slist */
-        q_drop->slist = imap_slist_pop(q_drop->series_map);
+		/* create a new one */
+		q_drop->series_map = imap_new();
 
-        if (q_drop->slist != NULL)
-        {
-            /* now we can simply destroy the imap */
-            imap_free(q_drop->series_map, NULL);
+		if (q_drop->series_map == NULL)
+		{
+			MEM_ERR_RET
+		}
 
-            /* create a new one */
-            q_drop->series_map = imap_new();
+		uv_async_t * next = (uv_async_t *) malloc(sizeof(uv_async_t));
 
-            if (q_drop->series_map == NULL)
-            {
-                MEM_ERR_RET
-            }
+		if (next == NULL)
+		{
+			MEM_ERR_RET
+		}
 
-            uv_async_t * next =
-                    (uv_async_t *) malloc(sizeof(uv_async_t));
+		next->data = handle->data;
 
-            if (next == NULL)
-            {
-                MEM_ERR_RET
-            }
+		uv_async_init(
+				siri.loop,
+				next,
+				(uv_async_cb) async_filter_series);
+		uv_async_send(next);
 
-            next->data = handle->data;
+		uv_close((uv_handle_t *) handle, (uv_close_cb) free);
 
-            uv_async_init(
-                    siri.loop,
-                    next,
-                    (uv_async_cb) async_filter_series);
-            uv_async_send(next);
-
-            uv_close((uv_handle_t *) handle, (uv_close_cb) free);
-        }
     }
     else
     {
         double percent = (double)
-                q_drop->series_map->len / siridb->series_map->len;
+                q_drop->slist->len / siridb->series_map->len;
 
         if (IS_MASTER &&
-            q_drop->series_map->len &&
+            q_drop->slist->len &&
             (~q_drop->flags & QUERIES_IGNORE_DROP_THRESHOLD) &&
             percent >= siridb->drop_threshold)
         {
@@ -2138,17 +2159,9 @@ static void exit_drop_series(uv_async_t * handle)
         {
             QP_ADD_SUCCESS
 
-            q_drop->n = q_drop->series_map->len;
+            q_drop->n = q_drop->slist->len;
 
-            q_drop->slist = imap_2slist_ref(q_drop->series_map);
-
-            if (q_drop->slist == NULL)
-            {
-                MEM_ERR_RET
-            }
-
-            uv_async_t * next =
-                    (uv_async_t *) malloc(sizeof(uv_async_t));
+            uv_async_t * next = (uv_async_t *) malloc(sizeof(uv_async_t));
 
             if (next == NULL)
             {
@@ -2312,8 +2325,7 @@ static void exit_drop_shards(uv_async_t * handle)
 
         q_drop->n = q_drop->shards_list->len;
 
-        uv_async_t * next =
-                (uv_async_t *) malloc(sizeof(uv_async_t));
+        uv_async_t * next = (uv_async_t *) malloc(sizeof(uv_async_t));
 
         if (next == NULL)
         {
@@ -2514,8 +2526,6 @@ static void exit_list_pools(uv_async_t * handle)
     uint_fast16_t prop;
     cexpr_t * where_expr = q_list->where_expr;
 
-//    MASTER_CHECK_ACCESSIBLE(siridb)
-
     if (q_list->props == NULL)
     {
         q_list->props = slist_new(3);
@@ -2609,8 +2619,7 @@ static void exit_list_series(uv_async_t * handle)
         MEM_ERR_RET;
     }
 
-    uv_async_t * next =
-            (uv_async_t *) malloc(sizeof(uv_async_t));
+    uv_async_t * next = (uv_async_t *) malloc(sizeof(uv_async_t));
 
     if (next == NULL)
     {
@@ -3187,7 +3196,7 @@ static void exit_set_backup_mode(uv_async_t * handle)
     {
         QP_ADD_SUCCESS
         qp_add_fmt_safe(query->packer,
-                    "Successful %s backup mode on '%s'.",
+        			MSG_SUCCES_SET_BACKUP_MODE,
                     (backup_mode) ? "enabled" : "disabled",
                     server->name);
 
@@ -3419,7 +3428,7 @@ static void exit_set_log_level(uv_async_t * handle)
 
         QP_ADD_SUCCESS
         qp_add_fmt_safe(query->packer,
-                    "Successful set log level to '%s' on '%s'.",
+        			MSG_SUCCES_SET_LOG_LEVEL,
                     logger_level_name(log_level),
                     server->name);
 
@@ -3562,7 +3571,7 @@ static void exit_set_timezone(uv_async_t * handle)
 
         qp_add_fmt_safe(
                 query->packer,
-                "Successful changed timezone from '%s' to '%s'.",
+				MSG_SUCCES_SET_TIMEZONE,
                 iso8601_tzname(siridb->tz),
                 iso8601_tzname(new_tz));
 
@@ -4474,8 +4483,7 @@ static void on_drop_series_response(slist_t * promises, uv_async_t * handle)
         sirinet_promise_decref(promise);
     }
 
-    qp_add_fmt(query->packer,
-            "Successfully dropped %lu series.", q_drop->n);
+    qp_add_fmt(query->packer, MSG_SUCCES_DROP_SERIES, q_drop->n);
 
     SIRIPARSER_ASYNC_NEXT_NODE
 }
@@ -4531,10 +4539,7 @@ static void on_drop_shards_response(slist_t * promises, uv_async_t * handle)
         sirinet_promise_decref(promise);
     }
 
-    qp_add_fmt(query->packer,
-            "Successfully dropped %lu shards. (this number does not include "
-            "shards which are dropped on replica servers)",
-            q_drop->n);
+    qp_add_fmt(query->packer, MSG_SUCCES_DROP_SHARDS, q_drop->n);
 
     SIRIPARSER_ASYNC_NEXT_NODE
 }
@@ -5028,7 +5033,6 @@ static int items_select_master_merge(
     if (siridb_points_pack(points, query->packer))
     {
         sprintf(query->err_msg, "Memory allocation error.");
-
         siridb_points_free(points);
         return -1;
     }
@@ -5045,8 +5049,7 @@ int items_select_other(
 {
     siridb_query_t * query = (siridb_query_t *) handle->data;
 
-    return (
-            qp_add_string_term(query->packer, name) ||
+    return (qp_add_string_term(query->packer, name) ||
             siridb_points_raw_pack(points, query->packer));
 }
 

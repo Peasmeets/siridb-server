@@ -21,4 +21,14 @@
     
   * Fixed type in log message.
   
-  * Fixed stack overflow in median.
+  * Fixed bug in median (and median_low, median_high) when applying on a large
+    data set. (issue #22)
+    
+  * Improve median, median_high and median_low algorithm. (see issue #23)
+  
+  * Fixed bug in 'drop series' statement. (reported by Koos Joosten, issue #24)
+  
+  * Fixed bug in creating a new replica. Possible data loss could occur when
+    creating a new replica. (see issue #25)
+    
+  * Fixed bug in dropping items from the internal compact tree. (issue #26)
